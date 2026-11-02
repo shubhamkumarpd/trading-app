@@ -1,7 +1,11 @@
 from app.trading.paper_trading import PaperTradingEngine
+from app.trading.trade_logger import TradeLogger
 
-def test_open_sell_trade():
-    engine = PaperTradingEngine(initial_capital=100000)
+
+def test_open_sell_trade(tmp_path):
+    engine = PaperTradingEngine(
+        initial_capital=100000, trade_logger=TradeLogger(log_dir=tmp_path)
+    )
 
     signal = {
         "action": "SELL",
@@ -17,8 +21,10 @@ def test_open_sell_trade():
     assert trade["status"] == "OPEN"
 
 
-def test_close_sell_trade_with_profit():
-    engine = PaperTradingEngine(initial_capital=100000)
+def test_close_sell_trade_with_profit(tmp_path):
+    engine = PaperTradingEngine(
+        initial_capital=100000, trade_logger=TradeLogger(log_dir=tmp_path)
+    )
 
     signal = {
         "action": "SELL",

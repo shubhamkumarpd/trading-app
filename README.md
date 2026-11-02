@@ -56,14 +56,16 @@ selected symbol every five minutes, and stops at 15:30 IST:
 python run_day.py --symbol NSE:NIFTY50-INDEX --symbol NSE:NIFTYBANK-INDEX
 ```
 
-Each cycle also runs `--monitor` (history warm-up defaults to 10 days; pass
+Each cycle first runs `--monitor` (history warm-up defaults to 10 days; pass
 `--history-days 0` to disable it), and any paper trades still open when the
 session ends are squared off at the last close.
 
 Keep the terminal open, or use the systemd units below to start a fresh run
 each weekday. Keep the computer awake and signed in during market hours.
-The runner only prints proposals; it does not open a new paper trade every
-five minutes and never places a real order.
+Each cycle opens a paper trade when the signal is approved by the risk check
+(at most one open position per symbol) and logs it to `logs/trades`, so you can
+review the analysis accuracy afterwards. Pass `--no-auto-paper` to only print
+proposals. It never places a real order.
 
 Create `~/.config/systemd/user/fyers-paper-day.service` with this content
 (replace the Python path if your virtual environment is elsewhere):

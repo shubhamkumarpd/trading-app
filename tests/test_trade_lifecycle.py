@@ -166,6 +166,13 @@ def test_square_off_closes_at_the_latest_close(tmp_path):
     assert logger.get_all_trades()[0]["status"] == "CLOSED"
 
 
+def test_day_runner_opens_paper_trades_by_default():
+    from run_day import cycle_flags
+
+    assert cycle_flags(Namespace(no_auto_paper=False)) == ("--monitor", "--execute-paper")
+    assert cycle_flags(Namespace(no_auto_paper=True)) == ("--monitor",)
+
+
 def test_day_runner_passes_warm_up_and_mode_flags():
     args = Namespace(timeframe=5, capital=100_000, risk_percent=1.0, history_days=10)
 

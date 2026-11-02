@@ -29,6 +29,10 @@ def parse_args() -> argparse.Namespace:
         "--history-days", type=int, default=10,
         help="Days of FYERS history used to warm up indicators so signals can start at the open (0 = off).",
     )
+    parser.add_argument(
+        "--no-auto-paper", action="store_true",
+        help="Only print proposals; do not open paper trades automatically.",
+    )
     parser.add_argument("--start-now", action="store_true", help="Start immediately instead of waiting for 09:15 IST.")
     return parser.parse_args()
 
@@ -64,7 +68,17 @@ def build_command(raw_file: Path, symbol: str, args: argparse.Namespace, extra: 
     return command + list(extra)
 
 
-def analyze(raw_file: Path, args: argparse.Namespace, extra: tuple = ("--monitor",)) -> None:
+def cycle_flags(args: argparse.Namespace) -> tuple:
+    """Flags for each five-minute cycle: close hit trades, then open new ones."""
+    flags = ["--monitor"]
+    if not getattr(args, "no_auto_paper", False):
+        flags.append("--execute-paper")
+    return tuple(flags)
+
+
+def analyze(raw_file: Path, args: argparse.Namespace, extra: tuple | None = None) -> None:
+    if extra is None:
+        extra = cycle_flags(args)
     for symbol in args.symbol:
         command = build_command(raw_file, symbol, args, extra)
         result = subprocess.run(command, check=False, text=True, capture_output=True)
