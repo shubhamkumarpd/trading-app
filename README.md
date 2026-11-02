@@ -28,6 +28,23 @@ python main.py --raw data/raw/market_data_YYYY-MM-DD.csv \
   --symbol NSE:NIFTY50-INDEX --timeframe 5
 ```
 
+### Warm-up, trade monitoring and daily loss
+
+- `--history-days N` prepends `N` days of FYERS history so EMA 50 is ready at
+  the open. Without it the first signal can only appear about 250 minutes
+  (50 candles) after the collector starts. History is cached once per day in
+  `data/processed`; if it cannot be fetched the analysis still runs and a
+  warning goes to stderr.
+- `--monitor` closes open paper trades for the symbol when a candle that
+  started after entry touches the stop-loss or target. If one candle touches
+  both, the stop-loss wins; a gap through the stop fills at the open.
+- `--square-off` closes the symbol's open paper trades at the latest close and
+  exits (end of day).
+- Cash, open positions and the daily loss are rebuilt from today's
+  `logs/trades` file, so they carry over between runs. `--daily-loss` is only
+  needed to override the value read from the log. A symbol cannot have two open
+  paper positions at once.
+
 Run tests with `pytest -q`.
 
 ## Run automatically for the NSE session
@@ -38,6 +55,10 @@ selected symbol every five minutes, and stops at 15:30 IST:
 ```bash
 python run_day.py --symbol NSE:NIFTY50-INDEX --symbol NSE:NIFTYBANK-INDEX
 ```
+
+Each cycle also runs `--monitor` (history warm-up defaults to 10 days; pass
+`--history-days 0` to disable it), and any paper trades still open when the
+session ends are squared off at the last close.
 
 Keep the terminal open, or use the systemd units below to start a fresh run
 each weekday. Keep the computer awake and signed in during market hours.

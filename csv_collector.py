@@ -1,3 +1,4 @@
+import atexit
 import os
 import csv
 from pathlib import Path
@@ -31,6 +32,9 @@ filename = f"data/raw/market_data_{date}.csv"
 file_exists = os.path.exists(filename)
 
 csv_file = open(filename, "a", newline="", encoding="utf-8")
+# The websocket reconnects automatically (reconnect=True), so the file must stay
+# open across disconnects. Close it only when the process exits.
+atexit.register(csv_file.close)
 
 writer = csv.writer(csv_file)
 
@@ -80,8 +84,11 @@ def on_error(message):
 
 
 def on_close(message):
+    # Do not close the file here: after an automatic reconnect on_message would
+    # write to a closed file and raise ValueError. Just flush what we have.
     print("Connection closed:", message)
-    csv_file.close()
+    if not csv_file.closed:
+        csv_file.flush()
 
 
 def on_connect():

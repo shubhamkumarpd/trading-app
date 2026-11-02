@@ -25,6 +25,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeframe", type=int, default=5, help="Candle timeframe and analysis interval in minutes.")
     parser.add_argument("--capital", type=float, default=100_000)
     parser.add_argument("--risk-percent", type=float, default=1.0)
+    parser.add_argument(
+        "--history-days", type=int, default=10,
+        help="Days of FYERS history used to warm up indicators so signals can start at the open (0 = off).",
+    )
     parser.add_argument("--start-now", action="store_true", help="Start immediately instead of waiting for 09:15 IST.")
     return parser.parse_args()
 
@@ -49,13 +53,20 @@ def seconds_to_next_boundary(minutes: int) -> float:
     return max(1.0, (next_boundary - now).total_seconds())
 
 
-def analyze(raw_file: Path, args: argparse.Namespace) -> None:
+def build_command(raw_file: Path, symbol: str, args: argparse.Namespace, extra: tuple = ()) -> list:
+    """Command line for one ``main.py`` run; ``extra`` holds mode flags."""
+    command = [
+        sys.executable, "main.py", "--raw", str(raw_file), "--symbol", symbol,
+        "--timeframe", str(args.timeframe), "--capital", str(args.capital),
+        "--risk-percent", str(args.risk_percent),
+        "--history-days", str(args.history_days),
+    ]
+    return command + list(extra)
+
+
+def analyze(raw_file: Path, args: argparse.Namespace, extra: tuple = ("--monitor",)) -> None:
     for symbol in args.symbol:
-        command = [
-            sys.executable, "main.py", "--raw", str(raw_file), "--symbol", symbol,
-            "--timeframe", str(args.timeframe), "--capital", str(args.capital),
-            "--risk-percent", str(args.risk_percent),
-        ]
+        command = build_command(raw_file, symbol, args, extra)
         result = subprocess.run(command, check=False, text=True, capture_output=True)
         stamp = now_ist().strftime("%H:%M:%S")
         if result.returncode == 0:
@@ -98,6 +109,12 @@ def main() -> int:
             time.sleep(seconds_to_next_boundary(args.timeframe))
             if args.start_now and now_ist().time() >= SESSION_END:
                 break
+
+        # The session ended normally: close any paper trades still open.
+        today = now_ist().strftime("%Y-%m-%d")
+        raw_file = Path("data/raw") / f"market_data_{today}.csv"
+        if raw_file.exists():
+            analyze(raw_file, args, extra=("--square-off",))
     except KeyboardInterrupt:
         print("Stopping day runner.")
     finally:

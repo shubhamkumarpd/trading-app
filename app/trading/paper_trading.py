@@ -4,6 +4,27 @@ from uuid import uuid4
 
 from app.trading.trade_logger import TradeLogger
 
+_FLOAT_FIELDS = (
+    "entry_price", "stop_loss", "target", "exit_price",
+    "gross_pnl", "charges", "net_pnl",
+)
+
+
+def _parse_logged_trade(row):
+    """Turn a CSV row from the trade log back into a typed trade dict."""
+    trade = {key: value for key, value in row.items() if value not in (None, "")}
+
+    for field in _FLOAT_FIELDS:
+        if field in trade:
+            trade[field] = float(trade[field])
+
+    trade["quantity"] = int(float(trade["quantity"]))
+
+    if "net_pnl" in trade:
+        trade["pnl"] = trade["net_pnl"]
+
+    return trade
+
 
 class PaperTradingEngine:
 
@@ -17,6 +38,32 @@ class PaperTradingEngine:
         self.closed_trades = []
 
         self.trade_logger = trade_logger or TradeLogger()
+
+    @classmethod
+    def from_log(cls, initial_capital=100000, trade_logger=None, trade_date=None):
+        """Rebuild cash, open positions and closed trades from the day's log.
+
+        Each command invocation creates a new engine, so without this the cash
+        balance and open positions would be forgotten between runs.
+        """
+        engine = cls(initial_capital=initial_capital, trade_logger=trade_logger)
+
+        for row in engine.trade_logger.get_all_trades(trade_date):
+            trade = _parse_logged_trade(row)
+
+            if trade.get("status") == "CLOSED":
+                engine.closed_trades.append(trade)
+                engine.cash += trade.get("net_pnl", 0.0)
+            else:
+                engine.open_positions.append(trade)
+                engine.cash -= trade["entry_price"] * trade["quantity"]
+
+        return engine
+
+    def realised_loss(self):
+        """Net realised loss for the logged day (0 when flat or in profit)."""
+        net = sum(trade.get("net_pnl", 0.0) for trade in self.closed_trades)
+        return round(max(0.0, -net), 2)
 
     def open_trade(self, signal, quantity):
         action = signal.get("action")
