@@ -4,6 +4,11 @@ Only candles that start at or after the trade was opened are examined.  The
 candle that was still forming at entry time mixes pre-entry prices, so it is
 skipped to avoid false stop-outs.  When one candle touches both levels the
 stop-loss wins, which is the conservative assumption.
+
+``charges`` may be a number or a callable ``(trade, exit_price) -> float`` so
+option trades can be charged from their own entry and exit premiums.
+``exit_adjust`` is an optional ``(price, reason) -> price`` hook that applies
+slippage to the fill (an option seller's bid is below the last traded price).
 """
 
 import pandas as pd
@@ -38,7 +43,15 @@ def find_exit(trade, candles):
     return None
 
 
-def monitor_open_trades(engine, candles, symbol, charges=0):
+def _charges_for(charges, trade, exit_price):
+    return charges(trade, exit_price) if callable(charges) else charges
+
+
+def _adjusted(price, reason, exit_adjust):
+    return exit_adjust(price, reason) if exit_adjust else price
+
+
+def monitor_open_trades(engine, candles, symbol, charges=0, exit_adjust=None):
     """Close every open trade for ``symbol`` that hit its stop or target."""
     closed = []
 
@@ -51,16 +64,20 @@ def monitor_open_trades(engine, candles, symbol, charges=0):
             continue
 
         exit_price, reason = result
+        exit_price = _adjusted(exit_price, reason, exit_adjust)
         closed.append(
             engine.close_trade(
-                trade["trade_id"], exit_price, reason=reason, charges=charges
+                trade["trade_id"],
+                exit_price,
+                reason=reason,
+                charges=_charges_for(charges, trade, exit_price),
             )
         )
 
     return closed
 
 
-def square_off(engine, symbol, price, reason="EOD", charges=0):
+def square_off(engine, symbol, price, reason="EOD", charges=0, exit_adjust=None):
     """Close every open trade for ``symbol`` at ``price`` (end of session)."""
     closed = []
 
@@ -68,9 +85,13 @@ def square_off(engine, symbol, price, reason="EOD", charges=0):
         if trade.get("symbol") != symbol:
             continue
 
+        fill = _adjusted(price, reason, exit_adjust)
         closed.append(
             engine.close_trade(
-                trade["trade_id"], price, reason=reason, charges=charges
+                trade["trade_id"],
+                fill,
+                reason=reason,
+                charges=_charges_for(charges, trade, fill),
             )
         )
 

@@ -56,7 +56,7 @@ selected symbol every five minutes, and stops at 15:30 IST:
 python run_day.py --symbol NSE:NIFTY50-INDEX --symbol NSE:NIFTYBANK-INDEX
 ```
 
-Each cycle first runs `--monitor` (history warm-up defaults to 10 days; pass
+(For NIFTY weekly options use `--options`, described below.) Each cycle first runs `--monitor` (history warm-up defaults to 10 days; pass
 `--history-days 0` to disable it), and any paper trades still open when the
 session ends are squared off at the last close.
 
@@ -102,3 +102,64 @@ systemctl --user daemon-reload
 systemctl --user enable --now fyers-paper-day.timer
 systemctl --user list-timers fyers-paper-day.timer
 ```
+
+
+## NIFTY weekly option paper trading (buyer)
+
+NSE now lists weekly options only on NIFTY 50 (expiry every Tuesday; a holiday
+moves it to the previous trading day), so the option flow trades NIFTY only. The
+index candles decide direction: bullish buys a CE, bearish buys a PE. The
+contract is chosen from the FYERS option chain, bought at the **ask**, and
+stop-loss and target are set on the **premium**.
+
+```bash
+python run_day.py --options --symbol NSE:NIFTY50-INDEX
+# or one cycle by hand:
+python options_main.py --raw data/raw/market_data_YYYY-MM-DD.csv --monitor
+python options_main.py --raw data/raw/market_data_YYYY-MM-DD.csv --square-off
+```
+
+Rules and defaults (all flags on `options_main.py`):
+
+| Rule | Default |
+| --- | --- |
+| Contract | ATM, nearest weekly expiry (`--strike-offset` for ITM steps of 50) |
+| Lot size | 65 (`--lot-size`; check NSE circulars, it gets revised) |
+| Max loss per trade | 3% of capital (`--risk-percent`, capped at 5) |
+| Stop / target | -30% / +60% of premium (`--sl-pct`, `--reward-multiple`) |
+| Lots | at most 1 (`--max-lots`) |
+| Spread filter | skip if bid-ask spread is above 3% |
+| Expiry day | no entries (`--allow-expiry-day` to enable) |
+| Entries | none after 14:45 IST; one open position at a time |
+| After a stop-loss | 30 minute cooldown |
+| Daily loss limit | 5% of capital |
+| Exit fills | 0.5% below the trigger price (selling at the bid) |
+| Charges | brokerage, STT 0.15% on sells, exchange, SEBI, stamp, GST |
+
+Holidays are not built in: pass `--holiday YYYY-MM-DD` (repeatable) so expiry
+dates shift correctly. Positions are intraday only and are squared off at the
+end of the session.
+
+When a trade opens, the contract is added to `data/watch_symbols_<date>.txt`;
+the collector subscribes to it within about five seconds and records its ticks,
+which is what lets `--monitor` see the stop or target. The first candle after
+entry is the earliest one that can close the trade.
+
+### Logs
+
+- `logs/trades/trade_history_<date>.csv` gains option columns (type, strike,
+  expiry, DTE, lot size, index level at entry, spread, signal confidence).
+  Older daily files are upgraded automatically.
+- `logs/decisions/decisions_<date>.csv` has one row per cycle, including
+  NO_TRADE, SKIPPED (position open, cooldown, chain unavailable) and REJECTED
+  (spread, risk, cutoff).
+- `app.reports.decision_accuracy.evaluate_decisions` scores the index calls
+  against what NIFTY did 15, 30 and 60 minutes later, and
+  `TradePerformance` now reports expectancy, average win/loss and max drawdown.
+
+### Not verified yet
+
+The FYERS option chain call and its response layout, and the collector
+subscribing to option contracts during a live session, have only been tested
+with fixtures. Watch one full live session end to end before trusting results, and compare the charge model with a real contract note.
+The strategy itself has not been backtested.

@@ -1,6 +1,8 @@
 import atexit
 import os
 import csv
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -16,11 +18,15 @@ ACCESS_TOKEN = Path("token.txt").read_text().strip()
 if not APP_ID or not ACCESS_TOKEN:
     raise ValueError("FYERS credentials or access token missing")
 
-# Instruments to monitor
+# Instruments to monitor.  Phase 1 trades NIFTY 50 weekly options only; the
+# option contract being held is added at run time through the watch file.
 SYMBOLS = [
     "NSE:NIFTY50-INDEX",
-    "NSE:NIFTYBANK-INDEX"
 ]
+
+WATCH_FILE = Path("data") / f"watch_symbols_{datetime.now():%Y-%m-%d}.txt"
+subscribed_extra = set()
+connected = False
 
 # Create CSV directory
 Path("data/raw").mkdir(parents=True, exist_ok=True)
@@ -91,7 +97,35 @@ def on_close(message):
         csv_file.flush()
 
 
+def read_watch_symbols():
+    """Option contracts that options_main.py asked us to record today."""
+    if not WATCH_FILE.exists():
+        return []
+    return [line.strip() for line in WATCH_FILE.read_text().splitlines() if line.strip()]
+
+
+def subscribe_watch_symbols():
+    new = [s for s in read_watch_symbols() if s not in subscribed_extra]
+    if not new:
+        return
+    fyers.subscribe(symbols=new, data_type="SymbolUpdate")
+    subscribed_extra.update(new)
+    print("Subscribed to option contracts:", new)
+
+
+def watch_loop():
+    while True:
+        time.sleep(5)
+        if not connected:
+            continue
+        try:
+            subscribe_watch_symbols()
+        except Exception as error:  # never let the watcher kill the collector
+            print("Watch-file subscribe failed:", error)
+
+
 def on_connect():
+    global connected
     print("Connected to FYERS!")
     print("Subscribing to instruments...")
 
@@ -99,6 +133,11 @@ def on_connect():
         symbols=SYMBOLS,
         data_type="SymbolUpdate"
     )
+
+    # After an automatic reconnect the earlier option subscriptions are gone.
+    subscribed_extra.clear()
+    connected = True
+    subscribe_watch_symbols()
 
     print("CSV data collection started.")
 
@@ -118,5 +157,6 @@ fyers = data_ws.FyersDataSocket(
 print("Starting FYERS CSV collector...")
 
 fyers.connect()
+threading.Thread(target=watch_loop, daemon=True).start()
 fyers.keep_running()
 

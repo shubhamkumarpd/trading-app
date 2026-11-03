@@ -19,6 +19,10 @@ class TradePerformance:
                 "gross_pnl": 0,
                 "net_pnl": 0,
                 "profit_factor": 0,
+                "avg_win": 0,
+                "avg_loss": 0,
+                "expectancy": 0,
+                "max_drawdown": 0,
             }
 
         winners = [
@@ -57,6 +61,19 @@ class TradePerformance:
             else None
         )
 
+        pnls = [
+            float(trade.get("net_pnl", trade.get("pnl", 0)))
+            for trade in self.trades
+        ]
+        equity = peak = max_drawdown = 0.0
+        for pnl in pnls:
+            equity += pnl
+            peak = max(peak, equity)
+            max_drawdown = max(max_drawdown, peak - equity)
+
+        avg_win = gross_profit / len(winners) if winners else 0.0
+        avg_loss = gross_loss / len(losers) if losers else 0.0
+
         return {
             "total_trades": total,
             "winning_trades": len(winners),
@@ -65,4 +82,10 @@ class TradePerformance:
             "gross_pnl": round(gross_pnl, 2),
             "net_pnl": round(net_pnl, 2),
             "profit_factor": profit_factor,
+            "avg_win": round(avg_win, 2),
+            "avg_loss": round(avg_loss, 2),
+            # Average net result per trade after charges; positive is the goal.
+            "expectancy": round(net_pnl / total, 2),
+            # Largest peak-to-trough fall of cumulative net P&L, in rupees.
+            "max_drawdown": round(max_drawdown, 2),
         }

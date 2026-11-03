@@ -25,6 +25,16 @@ class TradeLogger:
             "charges",
             "net_pnl",
             "status",
+            # Option details; blank for plain index paper trades.
+            "underlying",
+            "option_type",
+            "strike",
+            "expiry",
+            "dte",
+            "lot_size",
+            "index_entry",
+            "spread_pct",
+            "signal_confidence",
         ]
 
     def _get_trade_date(self, trade):
@@ -47,6 +57,22 @@ class TradeLogger:
             with open(file_path, "w", newline="", encoding="utf-8") as file:
                 writer = csv.DictWriter(file, fieldnames=self.fields)
                 writer.writeheader()
+            return
+
+        # A log written before the option columns existed has a shorter header;
+        # rewrite it so appended rows line up with their columns.
+        with open(file_path, "r", newline="", encoding="utf-8") as file:
+            reader = csv.DictReader(file)
+            header = reader.fieldnames
+            rows = list(reader)
+
+        if header != self.fields:
+            with open(file_path, "w", newline="", encoding="utf-8") as file:
+                writer = csv.DictWriter(file, fieldnames=self.fields)
+                writer.writeheader()
+                writer.writerows(
+                    {field: row.get(field, "") for field in self.fields} for row in rows
+                )
 
     def log_trade(self, trade):
         file_path = self._get_file_path(trade)

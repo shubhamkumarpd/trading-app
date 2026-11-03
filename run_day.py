@@ -2,7 +2,8 @@
 
 The runner starts the existing collector, performs a fresh analysis at each
 candle boundary, and stops the collector at the configured market close.  It
-does not submit broker orders or open paper positions automatically.
+never submits broker orders.  Paper positions are opened automatically unless
+``--no-auto-paper`` is given; ``--options`` runs the NIFTY weekly-option flow.
 """
 
 import argparse
@@ -24,7 +25,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--symbol", action="append", required=True, help="Symbol to analyze; may be supplied more than once.")
     parser.add_argument("--timeframe", type=int, default=5, help="Candle timeframe and analysis interval in minutes.")
     parser.add_argument("--capital", type=float, default=100_000)
-    parser.add_argument("--risk-percent", type=float, default=1.0)
+    parser.add_argument(
+        "--risk-percent", type=float, default=None,
+        help="Max loss per trade as %% of capital (default 1 for the index, 3 for --options).",
+    )
+    parser.add_argument(
+        "--options", action="store_true",
+        help="Trade NIFTY 50 weekly options (options_main.py) instead of the index itself.",
+    )
     parser.add_argument(
         "--history-days", type=int, default=10,
         help="Days of FYERS history used to warm up indicators so signals can start at the open (0 = off).",
@@ -59,19 +67,22 @@ def seconds_to_next_boundary(minutes: int) -> float:
 
 def build_command(raw_file: Path, symbol: str, args: argparse.Namespace, extra: tuple = ()) -> list:
     """Command line for one ``main.py`` run; ``extra`` holds mode flags."""
+    script = "options_main.py" if getattr(args, "options", False) else "main.py"
     command = [
-        sys.executable, "main.py", "--raw", str(raw_file), "--symbol", symbol,
+        sys.executable, script, "--raw", str(raw_file), "--symbol", symbol,
         "--timeframe", str(args.timeframe), "--capital", str(args.capital),
-        "--risk-percent", str(args.risk_percent),
         "--history-days", str(args.history_days),
     ]
+    if args.risk_percent is not None:
+        command += ["--risk-percent", str(args.risk_percent)]
     return command + list(extra)
 
 
 def cycle_flags(args: argparse.Namespace) -> tuple:
     """Flags for each five-minute cycle: close hit trades, then open new ones."""
     flags = ["--monitor"]
-    if not getattr(args, "no_auto_paper", False):
+    # options_main.py always opens paper trades; --no-auto-paper is index-only.
+    if not getattr(args, "no_auto_paper", False) and not getattr(args, "options", False):
         flags.append("--execute-paper")
     return tuple(flags)
 
@@ -94,6 +105,12 @@ def main() -> int:
     args = parse_args()
     if args.timeframe <= 0:
         raise ValueError("--timeframe must be positive")
+    if args.options:
+        if args.no_auto_paper:
+            raise ValueError("--no-auto-paper is not supported with --options; use options_main.py directly.")
+        # Weekly options exist only on NIFTY 50 now; Bank Nifty has no weekly expiry.
+        if any(symbol != "NSE:NIFTY50-INDEX" for symbol in args.symbol):
+            raise ValueError("--options supports only NSE:NIFTY50-INDEX.")
 
     current = now_ist()
     if not args.start_now:

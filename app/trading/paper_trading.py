@@ -65,7 +65,8 @@ class PaperTradingEngine:
         net = sum(trade.get("net_pnl", 0.0) for trade in self.closed_trades)
         return round(max(0.0, -net), 2)
 
-    def open_trade(self, signal, quantity):
+    def open_trade(self, signal, quantity, extra=None):
+        """Open a simulated trade; ``extra`` adds logged fields (e.g. option details)."""
         action = signal.get("action")
 
         if action not in ("BUY", "SELL"):
@@ -106,6 +107,8 @@ class PaperTradingEngine:
             "status": "OPEN",
             "opened_at": datetime.now(timezone.utc).isoformat(),
         }
+        if extra:
+            trade.update(extra)
 
         self.cash -= capital_required
         self.open_positions.append(trade)
