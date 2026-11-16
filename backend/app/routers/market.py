@@ -115,6 +115,73 @@ SYMBOL_NAME_MAP = {
     "NSE:INFY-EQ": ("INFOSYS", "equity", "NSE")
 }
 
+
+_IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+_STEP_MINUTES = {"1": 1, "2": 2, "3": 3, "5": 5, "10": 10, "15": 15, "20": 20, "30": 30, "45": 45, "60": 60, "120": 120, "240": 240}
+
+
+def _demo_candles(symbol: str, resolution: str, days: int) -> List[Dict[str, Any]]:
+    """Sample candles shown only when Fyers is not connected (the response says is_live=false).
+
+    Weekday NSE sessions 09:15-15:30 IST, seeded by symbol so the chart does not jump on refresh.
+    Indices get no volume, like the real feed; equities do.
+    """
+    import math
+    import random
+
+    rnd = random.Random(f"{symbol}|{resolution}")
+    base = next((i["ltp"] for i in DEFAULT_INDICES if i["symbol"] == symbol), 1500.0)
+    has_volume = symbol.endswith("-EQ")
+    now = datetime.datetime.now(_IST)
+    start_day = (now - datetime.timedelta(days=days)).date()
+
+    daily = resolution in ("D", "1D")
+    step = _STEP_MINUTES.get(resolution, 15)
+    vol = 0.0095 if daily else 0.0010 * math.sqrt(step / 15)
+
+    # walk forward from an arbitrary start, then rescale so the series ends near `base`
+    raw: List[Dict[str, Any]] = []
+    price = 100.0
+    day = start_day
+    while day <= now.date():
+        if day.weekday() < 5:
+            if daily:
+                slots = [datetime.datetime.combine(day, datetime.time(0, 0), _IST)]
+            else:
+                slots = []
+                t = datetime.datetime.combine(day, datetime.time(9, 15), _IST)
+                close_t = datetime.datetime.combine(day, datetime.time(15, 30), _IST)
+                while t < close_t:
+                    slots.append(t)
+                    t += datetime.timedelta(minutes=step)
+            for t in slots:
+                if t > now:
+                    break
+                o = price
+                c = o * (1 + rnd.gauss(0.00002, vol))
+                h = max(o, c) * (1 + abs(rnd.gauss(0, vol * 0.6)))
+                l = min(o, c) * (1 - abs(rnd.gauss(0, vol * 0.6)))
+                v = int(rnd.uniform(8_000, 60_000) * (1.8 if t.hour == 9 else 1.0)) if has_volume else 0
+                raw.append({"time": int(t.timestamp()), "open": o, "high": h, "low": l, "close": c, "volume": v})
+                price = c
+        day += datetime.timedelta(days=1)
+
+    if not raw:
+        return []
+    k = base / raw[-1]["close"]
+    return [
+        {
+            "time": r["time"],
+            "open": round(r["open"] * k, 2),
+            "high": round(r["high"] * k, 2),
+            "low": round(r["low"] * k, 2),
+            "close": round(r["close"] * k, 2),
+            "volume": r["volume"],
+        }
+        for r in raw
+    ]
+
+
 @router.get("/indices")
 def get_indices_quotes():
     token = get_fyers_token()
@@ -164,6 +231,9 @@ def get_symbol_history(
     days: int = Query(7, description="Number of days of history")
 ):
     token = get_fyers_token()
+    # FYERS history limits: ~100 days per request for intraday, 366 for daily
+    max_days = 366 if resolution in ("D", "1D") else 100
+    days = max(1, min(days, max_days))
     today = datetime.date.today()
     from_date = (today - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
     to_date = today.strftime("%Y-%m-%d")
@@ -201,28 +271,7 @@ def get_symbol_history(
         except Exception:
             pass
 
-    fallback_candles = []
-    base_price = 25000.0 if "NIFTY50" in symbol else (61000.0 if "BANK" in symbol else 81500.0)
-    now_ts = int(datetime.datetime.now().timestamp())
-    step = 900 if resolution == "15" else (300 if resolution == "5" else 60)
-    
-    current_val = base_price
-    for i in range(80, 0, -1):
-        ts = now_ts - (i * step)
-        delta = (i % 7 - 3) * 15.0
-        open_p = current_val
-        close_p = open_p + delta
-        high_p = max(open_p, close_p) + 12.0
-        low_p = min(open_p, close_p) - 10.0
-        current_val = close_p
-        fallback_candles.append({
-            "time": ts,
-            "open": round(open_p, 2),
-            "high": round(high_p, 2),
-            "low": round(low_p, 2),
-            "close": round(close_p, 2),
-            "volume": 15000 + (i * 200)
-        })
+    fallback_candles = _demo_candles(symbol, resolution, days)
 
     return {
         "status": "success",

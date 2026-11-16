@@ -71,3 +71,8 @@ logs/
 *.bak
 .DS_Store
 Thumbs.db
+
+# Frontend build output
+frontend/node_modules/
+frontend/.next/
+*.tsbuildinfo
