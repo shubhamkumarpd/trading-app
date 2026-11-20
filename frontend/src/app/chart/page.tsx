@@ -45,7 +45,7 @@ import {
   MoveHorizontal,
   MoveVertical,
 } from "lucide-react";
-import { getSymbolHistory, getMarketDepth, getIndicesQuotes, CandleItem, IndexQuoteItem } from "@/lib/api";
+import { getSymbolHistory, getMarketDepth, getIndicesQuotes, getPaperPortfolio, placePaperOrder, CandleItem, IndexQuoteItem, PaperPortfolio } from "@/lib/api";
 
 const PRESET_SYMBOLS = [
   { symbol: "NSE:NIFTY50-INDEX", name: "NIFTY 50", exchange: "NSE", cat: "benchmark" },
@@ -187,6 +187,9 @@ function ChartTerminalContent() {
   const [quantity, setQuantity] = useState("50");
   const [limitPrice, setLimitPrice] = useState("");
   const [orderSuccessMsg, setOrderSuccessMsg] = useState("");
+  const [orderError, setOrderError] = useState("");
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [paperPortfolio, setPaperPortfolio] = useState<PaperPortfolio | null>(null);
 
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const indicatorsRef = useRef<HTMLDivElement | null>(null);
@@ -290,6 +293,18 @@ function ChartTerminalContent() {
     };
   }, [currentSymbol, resolution, activeDateRange]);
 
+  const refreshPaperPortfolio = useCallback(async () => {
+    try {
+      setPaperPortfolio(await getPaperPortfolio());
+    } catch (err) {
+      console.error("Failed to load paper portfolio", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshPaperPortfolio();
+  }, [refreshPaperPortfolio]);
+
   /* ---- data: quiet refresh so the last candle keeps moving (live data only) ---- */
   useEffect(() => {
     if (!isLive) return;
@@ -388,10 +403,29 @@ function ChartTerminalContent() {
     return new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val);
   };
 
-  const handleOrderSubmit = (e: React.FormEvent) => {
+  const handleOrderSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setOrderSuccessMsg(`Order placed: ${activeSide.toUpperCase()} ${quantity} Qty ${currentItem.name} (${orderType})`);
-    setTimeout(() => setOrderSuccessMsg(""), 4000);
+    const qty = Number.parseInt(quantity, 10);
+    if (!Number.isInteger(qty) || qty <= 0) {
+      setOrderError("Enter a valid quantity.");
+      return;
+    }
+    setOrderSuccessMsg("");
+    setOrderError("");
+    setIsSubmittingOrder(true);
+    try {
+      const result = await placePaperOrder({
+        symbol: currentSymbol, name: currentItem.name, side: activeSide,
+        quantity: qty, price: currentItem.ltp, product_type: productType,
+      });
+      setOrderSuccessMsg(`${result.message} · ${activeSide.toUpperCase()} ${qty} ${currentItem.name}`);
+      await refreshPaperPortfolio();
+      setTimeout(() => setOrderSuccessMsg(""), 5000);
+    } catch (err) {
+      setOrderError(err instanceof Error ? err.message : "Paper order could not be placed.");
+    } finally {
+      setIsSubmittingOrder(false);
+    }
   };
 
   const toolBtn = (t: DrawTool, title: string, icon: React.ReactNode) => (
@@ -770,7 +804,7 @@ function ChartTerminalContent() {
               <div className="flex items-center justify-between border-b border-white/5 pb-2.5">
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
                   <Zap className="w-4 h-4 text-cyan-400" />
-                  <span>Execute Order • {currentItem.name}</span>
+                  <span>Paper Trade • {currentItem.name}</span>
                 </h3>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-white/5 text-slate-400">
                   LTP: {formatPrice(currentItem.ltp)}
@@ -783,6 +817,22 @@ function ChartTerminalContent() {
                   <span>{orderSuccessMsg}</span>
                 </div>
               )}
+              {orderError && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-200 text-xs">
+                  {orderError}
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-xl bg-cyan-500/10 border border-cyan-500/20 px-3 py-2">
+                  <span className="block text-[10px] uppercase tracking-wide text-cyan-200/70">Virtual cash</span>
+                  <span className="font-mono font-bold text-cyan-100">₹{formatPrice(paperPortfolio?.cash)}</span>
+                </div>
+                <div className="rounded-xl bg-white/[0.03] border border-white/5 px-3 py-2">
+                  <span className="block text-[10px] uppercase tracking-wide text-slate-500">Open positions</span>
+                  <span className="font-mono font-bold text-white">{paperPortfolio?.positions.length ?? "—"}</span>
+                </div>
+              </div>
 
               {/* Buy / Sell Tabs */}
               <div className="grid grid-cols-2 p-1 rounded-xl bg-slate-900/80 border border-white/5 text-xs font-bold">
@@ -833,8 +883,6 @@ function ChartTerminalContent() {
                       className="neo-input w-full px-3 py-2 rounded-xl text-white font-medium bg-[#131826]"
                     >
                       <option>Market</option>
-                      <option>Limit</option>
-                      <option>Stop Loss (SL)</option>
                     </select>
                   </div>
                 </div>
@@ -853,8 +901,8 @@ function ChartTerminalContent() {
                     <label className="text-slate-400 block mb-1 text-[11px]">Price (₹)</label>
                     <input
                       type="text"
-                      disabled={orderType === "Market"}
-                      value={orderType === "Market" ? "At Market Price" : limitPrice}
+                      disabled
+                      value="Live market price"
                       onChange={(e) => setLimitPrice(e.target.value)}
                       className="neo-input w-full px-3 py-2 rounded-xl text-white font-mono bg-[#131826] disabled:opacity-50"
                     />
@@ -862,7 +910,7 @@ function ChartTerminalContent() {
                 </div>
 
                 <div className="p-3 rounded-xl bg-white/[0.02] border border-white/5 flex justify-between text-xs">
-                  <span className="text-slate-400">Est. Margin</span>
+                  <span className="text-slate-400">Paper order value</span>
                   <span className="font-mono text-white font-bold">
                     {formatPrice((parseFloat(quantity) || 1) * (currentItem.ltp / 5))}
                   </span>
@@ -870,13 +918,14 @@ function ChartTerminalContent() {
 
                 <button
                   type="submit"
+                  disabled={isSubmittingOrder || currentItem.ltp <= 0}
                   className={`neo-btn w-full py-3 rounded-2xl font-bold text-xs text-white shadow-lg transition-all ${
                     activeSide === "buy"
                       ? "bg-gradient-to-r from-emerald-500 to-teal-600 shadow-emerald-500/25 hover:from-emerald-400 hover:to-teal-500"
                       : "bg-gradient-to-r from-rose-500 to-red-600 shadow-rose-500/25 hover:from-rose-400 hover:to-red-500"
                   }`}
                 >
-                  {activeSide === "buy" ? "CONFIRM BUY ORDER" : "CONFIRM SELL ORDER"}
+                  {isSubmittingOrder ? "PLACING PAPER ORDER…" : activeSide === "buy" ? "CONFIRM PAPER BUY" : "CONFIRM PAPER SELL"}
                 </button>
               </form>
             </div>
