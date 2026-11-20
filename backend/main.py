@@ -1,7 +1,7 @@
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import auth, user, market, stream
+from app.routers import auth, user, market, paper, stream
 
 app = FastAPI(
     title="TradePro API",
@@ -22,6 +22,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(user.router)
 app.include_router(market.router)
+app.include_router(paper.router)
 app.include_router(stream.router)
 
 @app.get("/")

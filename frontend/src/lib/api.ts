@@ -102,6 +102,20 @@ export interface HistoryResponse {
   candles: CandleItem[];
 }
 
+export interface PaperPosition {
+  symbol: string;
+  name: string;
+  quantity: number;
+  average_price: number;
+  realized_pnl: number;
+}
+
+export interface PaperPortfolio {
+  starting_cash: number;
+  cash: number;
+  positions: PaperPosition[];
+}
+
 export interface MarketDepthResponse {
   status: string;
   is_live: boolean;
@@ -224,4 +238,21 @@ export async function getMarketDepth(symbol: string): Promise<MarketDepthRespons
   });
   if (!res.ok) throw new Error("Failed to fetch market depth");
   return res.json();
+}
+
+export async function getPaperPortfolio(): Promise<PaperPortfolio> {
+  const res = await fetch(`${API_BASE}/api/paper/portfolio`, { cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to load paper portfolio");
+  return res.json();
+}
+
+export async function placePaperOrder(input: {
+  symbol: string; name: string; side: "buy" | "sell"; quantity: number; price: number; product_type: string;
+}): Promise<{ message: string; cash: number }> {
+  const res = await fetch(`${API_BASE}/api/paper/orders`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || "Paper order could not be placed");
+  return data;
 }
