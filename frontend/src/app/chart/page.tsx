@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState, Suspense } from "react
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
+import { useTicks, type Tick, type TickStatus } from "@/lib/useTicks";
 import {
   TradingChart,
   INDICATOR_CATALOG,
@@ -135,6 +136,24 @@ function HoldButton({
   );
 }
 
+const BADGE: Record<TickStatus, { text: string; dot: string; title: string }> = {
+  live: { text: "LIVE", dot: "bg-emerald-400 animate-pulse", title: "Real-time FYERS ticks" },
+  demo: { text: "DEMO", dot: "bg-amber-400 animate-pulse", title: "Simulated ticks: log in to FYERS for real prices" },
+  connecting: { text: "CONNECTING", dot: "bg-slate-400", title: "Connecting to the live feed" },
+  reconnecting: { text: "RECONNECTING", dot: "bg-amber-400", title: "Live feed dropped, retrying" },
+  offline: { text: "OFFLINE", dot: "bg-rose-500", title: "Cannot reach the backend socket, retrying" },
+};
+
+function LiveBadge({ status }: { status: TickStatus }) {
+  const b = BADGE[status];
+  return (
+    <span title={b.title} className="inline-flex items-center gap-1.5 self-center text-[10px] font-bold tracking-wider text-slate-300 px-2 py-0.5 rounded-full bg-white/5 border border-white/10">
+      <span className={`w-1.5 h-1.5 rounded-full ${b.dot}`} />
+      {b.text}
+    </span>
+  );
+}
+
 function ChartTerminalContent() {
   const searchParams = useSearchParams();
   const initialSymbol = searchParams.get("symbol") || "NSE:NIFTY50-INDEX";
@@ -176,6 +195,31 @@ function ChartTerminalContent() {
 
   const datasetKey = `${currentSymbol}|${resolution}|${activeDateRange}`;
   activeKeyRef.current = datasetKey;
+
+  /* ---- live ticks (WebSocket): chart candle moves per tick, header price follows ---- */
+  const [liveTick, setLiveTick] = useState<Tick | null>(null);
+  const tickPending = useRef<Tick | null>(null);
+  const tickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onTick = useCallback((t: Tick) => {
+    chartApi.current?.applyTick(t.ltp, t.ts);
+    tickPending.current = t;
+    if (tickTimer.current) return; // header re-renders at most ~5 times a second
+    tickTimer.current = setTimeout(() => {
+      tickTimer.current = null;
+      setLiveTick(tickPending.current);
+    }, 200);
+  }, []);
+  const tickStatus: TickStatus = useTicks(currentSymbol, onTick);
+  useEffect(() => {
+    tickPending.current = null;
+    setLiveTick(null);
+  }, [currentSymbol]);
+  useEffect(
+    () => () => {
+      if (tickTimer.current) clearTimeout(tickTimer.current);
+    },
+    []
+  );
 
   /* ---- saved preferences ---- */
   useEffect(() => {
@@ -258,9 +302,9 @@ function ChartTerminalContent() {
         if (hist && hist.candles && hist.is_live) setCandles(hist.candles);
         if (ind && ind.indices) setAllIndices(ind.indices);
       } catch (e) {}
-    }, POLL_MS);
+    }, tickStatus === "live" ? POLL_MS * 3 : POLL_MS);
     return () => clearInterval(id);
-  }, [isLive, datasetKey, currentSymbol, resolution, activeDateRange]);
+  }, [isLive, datasetKey, currentSymbol, resolution, activeDateRange, tickStatus]);
 
   // close the indicators menu when clicking anywhere outside it
   useEffect(() => {
@@ -290,7 +334,7 @@ function ChartTerminalContent() {
 
   const derived = deriveQuote(candles);
   const liveItem = allIndices.find((i) => i.symbol === currentSymbol);
-  const currentItem: IndexQuoteItem = liveItem || {
+  const baseItem: IndexQuoteItem = liveItem || {
     name: PRESET_SYMBOLS.find((s) => s.symbol === currentSymbol)?.name || currentSymbol,
     symbol: currentSymbol,
     exchange: PRESET_SYMBOLS.find((s) => s.symbol === currentSymbol)?.exchange || "NSE",
@@ -303,6 +347,20 @@ function ChartTerminalContent() {
     prev_close: derived.prev,
     category: "benchmark",
   };
+  // the streamed price wins over the polled quote; change is measured against the previous close
+  const currentItem: IndexQuoteItem = (() => {
+    if (!liveTick || liveTick.symbol !== currentSymbol) return baseItem;
+    const prev = baseItem.prev_close || liveTick.prev_close || 0;
+    const change = prev ? liveTick.ltp - prev : baseItem.change;
+    return {
+      ...baseItem,
+      ltp: liveTick.ltp,
+      change,
+      change_percent: prev ? (change / prev) * 100 : baseItem.change_percent,
+      high: baseItem.high > 0 ? Math.max(baseItem.high, liveTick.ltp) : liveTick.ltp,
+      low: baseItem.low > 0 ? Math.min(baseItem.low, liveTick.ltp) : liveTick.ltp,
+    };
+  })();
   const isPositive = currentItem.change >= 0;
   const isPinned = pinnedSymbols.includes(currentSymbol);
   const symbolName = PRESET_SYMBOLS.find((s) => s.symbol === currentSymbol)?.name || currentItem.name;
@@ -378,6 +436,7 @@ function ChartTerminalContent() {
 
             <div className="flex items-baseline gap-2.5">
               <span className="text-xl sm:text-2xl font-black font-mono text-white tracking-tight">{formatPrice(currentItem.ltp)}</span>
+              <LiveBadge status={tickStatus} />
               <span
                 className={`font-mono font-bold text-xs flex items-center gap-1 px-2 py-0.5 rounded-full ${
                   isPositive ? "bg-emerald-500/15 text-emerald-400" : "bg-rose-500/15 text-rose-400"
@@ -572,6 +631,7 @@ function ChartTerminalContent() {
                   drawingsKey={`${currentSymbol}|${resolution}`}
                   symbolName={symbolName}
                   resolutionLabel={tfLabel(resolution)}
+                  resolution={resolution}
                   range={activeDateRange}
                   chartKind={chartKind}
                   indicators={indicators}

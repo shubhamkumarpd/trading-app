@@ -84,6 +84,8 @@ export interface TradingChartHandle {
   zoomPrice: (factor: number) => void;
   /** move the view by this many bars (negative = back in time) */
   pan: (bars: number) => void;
+  /** live price: updates the forming candle (or opens the next one) and all indicators, without touching the view */
+  applyTick: (price: number, tsSeconds: number) => void;
   resetView: () => void;
   undoDrawing: () => void;
   clearDrawings: () => void;
@@ -97,6 +99,8 @@ interface Props {
   drawingsKey: string;
   symbolName: string;
   resolutionLabel: string;
+  /** FYERS resolution: minutes as a string ("15", "60") or "D" / "1D" */
+  resolution: string;
   range: RangeKey;
   chartKind: ChartKind;
   indicators: Record<string, boolean>;
@@ -216,6 +220,7 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
     drawingsKey,
     symbolName,
     resolutionLabel,
+    resolution,
     range,
     chartKind,
     indicators,
@@ -876,6 +881,81 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
     }
   }
 
+  /* ---------- live ticks ---------- */
+
+  const resolutionRef = useRef(resolution);
+  resolutionRef.current = resolution;
+  const chartKindRef = useRef(chartKind);
+  chartKindRef.current = chartKind;
+  const flushRef = useRef<number | null>(null);
+
+  // Push the (already updated) last candle and the matching last point of every indicator to the chart.
+  function flushLive() {
+    flushRef.current = null;
+    const main = mainRef.current;
+    const cs = csRef.current;
+    if (!main || !cs.length) return;
+    const kind = chartKindRef.current;
+    const last = (kind === "heikin" ? heikinAshi(cs) : cs)[cs.length - 1];
+    try {
+      if (kind === "area" || kind === "line") main.update({ time: last.time as Time, value: last.close } as any);
+      else main.update({ time: last.time as Time, open: last.open, high: last.high, low: last.low, close: last.close } as any);
+      const times = cs.map((c) => c.time);
+      const closes = cs.map((c) => c.close);
+      for (const r of regsRef.current) {
+        const data = r.compute(cs, closes, times);
+        r.series.update(data[data.length - 1] as any);
+      }
+    } catch {
+      // a refresh replaced the data under us; the next tick or refresh repairs it
+    }
+    scheduleLegend();
+  }
+
+  function applyTick(price: number, ts: number) {
+    const cs = csRef.current;
+    if (!cs.length || !Number.isFinite(price)) return;
+    const last = cs[cs.length - 1];
+    const res = resolutionRef.current;
+    const daily = res === "D" || res === "1D";
+    const step = daily ? 86400 : (parseInt(res, 10) || 15) * 60;
+    if (ts < last.time) return; // stale tick
+
+    let t = last.time;
+    if (ts >= last.time + step) {
+      if (daily) {
+        t = last.time + Math.floor((ts - last.time) / step) * step;
+      } else {
+        const sameDay = Math.floor((ts + IST_OFFSET) / 86400) === Math.floor((last.time + IST_OFFSET) / 86400);
+        if (sameDay) {
+          t = last.time + Math.floor((ts - last.time) / step) * step;
+        } else {
+          // first candle of a new session starts at 09:15 IST
+          const open = Math.floor((ts + IST_OFFSET) / 86400) * 86400 - IST_OFFSET + 9 * 3600 + 15 * 60;
+          if (ts < open) return; // pre-open tick: no candle yet
+          t = open + Math.floor((ts - open) / step) * step;
+        }
+      }
+    }
+
+    if (t === last.time) {
+      last.close = price;
+      if (price > last.high) last.high = price;
+      if (price < last.low) last.low = price;
+    } else {
+      cs.push({ time: t, open: last.close, high: Math.max(last.close, price), low: Math.min(last.close, price), close: price, volume: 0 });
+      timeIdxRef.current.set(t, cs.length - 1);
+    }
+    if (flushRef.current === null) flushRef.current = window.setTimeout(flushLive, 120);
+  }
+
+  useEffect(
+    () => () => {
+      if (flushRef.current !== null) window.clearTimeout(flushRef.current);
+    },
+    []
+  );
+
   function applyRange() {
     const chart = chartRef.current;
     const cs = csRef.current;
@@ -979,6 +1059,7 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
         if (!ts || !r) return;
         ts.setVisibleLogicalRange({ from: r.from + bars, to: r.to + bars });
       },
+      applyTick,
       resetView: () => {
         applyRange();
         chartRef.current?.priceScale("right", 0).applyOptions({ autoScale: true });
