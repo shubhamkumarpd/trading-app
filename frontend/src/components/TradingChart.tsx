@@ -877,6 +877,10 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
 
     if (cs.length && appliedKeyRef.current !== datasetKey) {
       appliedKeyRef.current = datasetKey;
+      // New symbol / timeframe / range: a hand-set price range from the previous dataset would hide the new
+      // candles (e.g. SENSEX 80,000 -> NIFTY 25,000), so go back to auto-fit and tell the page.
+      chart.priceScale("right", 0).applyOptions({ autoScale: true });
+      onAutoScaleChangeRef.current?.(true);
       applyRange();
     }
   }

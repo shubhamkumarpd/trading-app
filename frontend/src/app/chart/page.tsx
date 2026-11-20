@@ -200,8 +200,11 @@ function ChartTerminalContent() {
   const [liveTick, setLiveTick] = useState<Tick | null>(null);
   const tickPending = useRef<Tick | null>(null);
   const tickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadedKeyRef = useRef("");
+  loadedKeyRef.current = loadedKey;
   const onTick = useCallback((t: Tick) => {
-    chartApi.current?.applyTick(t.ltp, t.ts);
+    // the chart still holds the previous symbol's candles until the new ones arrive: do not mix them
+    if (loadedKeyRef.current === activeKeyRef.current) chartApi.current?.applyTick(t.ltp, t.ts);
     tickPending.current = t;
     if (tickTimer.current) return; // header re-renders at most ~5 times a second
     tickTimer.current = setTimeout(() => {
